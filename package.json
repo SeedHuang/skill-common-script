@@ -1,0 +1,33 @@
+{
+  "name": "skill-common-script",
+  "version": "0.1.0",
+  "description": "常用脚本 CLI 工具",
+  "type": "module",
+  "bin": {
+    "scs": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "localG": "npm run build && npm install -g .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "commander": "^15.1.0",
+    "inquirer": "^14.2.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "vitest": "^5.1.0"
+  }
+}
