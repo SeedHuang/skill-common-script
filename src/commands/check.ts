@@ -61,10 +61,35 @@ export function registerCheckCommands(program: Command): void {
     .command('criteria-engine')
     .description('校验判据引擎：schema / testcase / 渲染物一致性 + 分层预算')
     .option('--root <dir>', '项目根（默认当前目录）')
-    .action(async (options: { root?: string }) => {
-      const r = await runCriteriaEngine(resolve(options.root ?? process.cwd()));
-      for (const line of r.stdout) console.log(line);
-      for (const line of r.stderr) console.error(line);
-      process.exitCode = r.code;
-    });
+    .option('--engine <dir>', '引擎模块目录（默认 tools/quality/criteria-engine）')
+    .option('--data <dir>', '判据数据目录（默认 = --engine）')
+    .option('--projection <dir>', '渲染投影目录（默认 = --engine）')
+    .option('--terms <file>', '共享片段词表（默认 tools/quality/observable-terms.json）')
+    .option('--surface <dir>', '承接面扫描目录（可重复；默认 skills + tools/quality）', collectDirs, [])
+    .action(
+      async (options: {
+        root?: string;
+        engine?: string;
+        data?: string;
+        projection?: string;
+        terms?: string;
+        surface?: string[];
+      }) => {
+        const r = await runCriteriaEngine(resolve(options.root ?? process.cwd()), {
+          engineDir: options.engine,
+          dataDir: options.data,
+          projectionDir: options.projection,
+          termsFile: options.terms,
+          surfaces: options.surface && options.surface.length > 0 ? options.surface : undefined,
+        });
+        for (const line of r.stdout) console.log(line);
+        for (const line of r.stderr) console.error(line);
+        process.exitCode = r.code;
+      },
+    );
+}
+
+/** 可重复旗标：`--surface a --surface b` 累加成数组（commander 默认后值覆盖前值） */
+function collectDirs(value: string, previous: string[]): string[] {
+  return [...previous, value];
 }

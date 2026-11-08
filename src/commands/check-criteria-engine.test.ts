@@ -9,6 +9,10 @@ interface Fixture {
   ruleBody?: string;
 }
 
+/** 规则正文：非空白字符 > 100，且命中结构闸四件（触发 / 义务 / 例外 / 判定动作） */
+const RULE_BODY =
+  '# 规则\n\n触发：有人要写结论时。必须给出路径锚与取数命令。例外：纯翻译类不改判据。验证：跑 `exit 0`；判据 = 命令退出码为 0 且计数 = 1。补充说明：本条判据只服务测试夹具，用于把规则正文的非空白字符数撑过预算下限（≥100），并同时命中结构闸所需的四个要素——触发、义务、例外、判定动作。\n';
+
 /** 造一个最小项目根：假引擎模块 + 一条 rule + 一条 testcase */
 function withRoot<T>(f: Fixture, fn: (root: string) => Promise<T>): Promise<T> {
   const root = mkdtempSync(join(tmpdir(), 'scs-criteria-'));
@@ -33,8 +37,7 @@ function withRoot<T>(f: Fixture, fn: (root: string) => Promise<T>): Promise<T> {
   writeFileSync(join(engine, 'rules.json'), JSON.stringify({ rules: [] }));
   writeFileSync(
     join(root, 'rules', 'r1.md'),
-    f.ruleBody ??
-      '# 规则\n\n触发：有人要写结论时。必须给出路径锚与取数命令。例外：纯翻译类不改判据。验证：跑 `exit 0`；判据 = 命令退出码为 0 且计数 = 1。补充说明：本条判据只服务测试夹具，用于把规则正文的非空白字符数撑过预算下限（≥100），并同时命中结构闸所需的四个要素——触发、义务、例外、判定动作。\n',
+    f.ruleBody ?? RULE_BODY,
   );
   writeFileSync(
     join(root, 'tools', 'quality', 'observable-terms.json'),
@@ -80,5 +83,74 @@ describe('scs check criteria-engine', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+/** 造一个「引擎模块 / 判据数据 / 渲染投影」三目录分离的项目根（新仓布局） */
+function withSplitRoot<T>(cfg: { projection?: boolean }, fn: (root: string) => Promise<T>): Promise<T> {
+  const root = mkdtempSync(join(tmpdir(), 'scs-criteria-split-'));
+  const engine = join(root, 'builders', 'rules');
+  const data = join(root, 'dsl', 'rules');
+  const vocab = join(data, 'vocab');
+  mkdirSync(engine, { recursive: true });
+  mkdirSync(data, { recursive: true });
+  mkdirSync(vocab, { recursive: true });
+  mkdirSync(join(root, 'rules'), { recursive: true });
+  mkdirSync(join(root, 'skills'), { recursive: true });
+  writeFileSync(join(root, 'skills', 'keep.md'), '# keep\n');
+
+  writeFileSync(
+    join(engine, 'schema.mjs'),
+    [
+      'export function check() {}',
+      'export function checkTestcase() {}',
+      'export function judge(rule, input) { return input }',
+    ].join('\n'),
+  );
+  writeFileSync(join(engine, 'interpreters.mjs'), "export const interpreters = [{ ext: 'md', render: () => '# 投影\\n' }]\n");
+  writeFileSync(join(engine, 'rules.mjs'), 'export function renderRuleData() { return "" }\n');
+  if (cfg.projection !== false) writeFileSync(join(engine, 'r1.md'), '# 投影\n');
+
+  writeFileSync(join(data, 'r1.json'), JSON.stringify({ id: 'r1' }));
+  writeFileSync(join(data, 'r1.testcase.json'), JSON.stringify({ rule: 'r1', cases: [{ input: 'a', expect: 'a' }] }));
+  writeFileSync(join(data, 'rules.json'), JSON.stringify({ rules: [] }));
+  // 词表放子目录：判据数据目录的枚举口径是「顶层 .json 即一条判据」，词表混在顶层会被当成 rule
+  writeFileSync(join(vocab, 'terms.json'), JSON.stringify({ sharedPhrases: [] }));
+
+  writeFileSync(join(root, 'rules', 'r1.md'), RULE_BODY);
+  return fn(root).finally(() => rmSync(root, { recursive: true, force: true }));
+}
+
+const SPLIT_OPTIONS = {
+  engineDir: 'builders/rules',
+  dataDir: 'dsl/rules',
+  projectionDir: 'builders/rules',
+  termsFile: 'dsl/rules/vocab/terms.json',
+  surfaces: ['skills'],
+};
+
+describe('scs check criteria-engine（布局参数）', () => {
+  it('引擎 / 数据 / 投影三目录分离 → exit 0', async () => {
+    await withSplitRoot({}, async (root) => {
+      const r = await runCriteriaEngine(root, SPLIT_OPTIONS);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain('criteria-engine ok');
+    });
+  });
+
+  it('投影目录缺件 → exit 1 且报 ProjectionMissing', async () => {
+    await withSplitRoot({ projection: false }, async (root) => {
+      const r = await runCriteriaEngine(root, SPLIT_OPTIONS);
+      expect(r.code).toBe(1);
+      expect(r.stderr.join('\n')).toMatch(/ProjectionMissing/);
+    });
+  });
+
+  it('数据目录不存在 → exit 2 且点名目录', async () => {
+    await withSplitRoot({}, async (root) => {
+      const r = await runCriteriaEngine(root, { ...SPLIT_OPTIONS, dataDir: 'dsl/missing' });
+      expect(r.code).toBe(2);
+      expect(r.stderr.join('\n')).toMatch(/判据数据目录不存在：dsl\/missing/);
+    });
   });
 });

@@ -125,9 +125,22 @@ check-observable fail（命中 1 行 / stale 1 条）
 ```bash
 scs check criteria-engine
 scs check criteria-engine --root .
+scs check criteria-engine --engine tools/docgen/builders/rules \
+  --data tools/docgen/dsl/rules --projection tools/docgen/builders/rules \
+  --terms tools/docgen/dsl/rules/observable-terms.json \
+  --surface skills --surface tools/docgen
 ```
 
-依赖项目内的判据引擎目录 `<root>/tools/quality/criteria-engine/`（`schema.mjs`、`interpreters.mjs`、`rules.mjs`、`*.json`、`*.testcase.json`），判定逻辑不复制到 CLI 里，全部委托给该目录。
+默认按项目内的 `<root>/tools/quality/criteria-engine/` 取引擎模块（`schema.mjs`、`interpreters.mjs`、`rules.mjs`）、判据数据（`*.json`、`*.testcase.json`）与渲染投影（`*.<ext>`）；判定逻辑不复制到 CLI 里，全部委托给该目录。目录是参数而不是写死的常量——引擎模块、判据数据、渲染投影三者可以分开放。
+
+| 选项 | 说明 |
+| --- | --- |
+| `--root <dir>` | 项目根，默认当前目录 |
+| `--engine <dir>` | 引擎模块目录，默认 `tools/quality/criteria-engine` |
+| `--data <dir>` | 判据数据目录，默认 = `--engine` |
+| `--projection <dir>` | 渲染投影目录，默认 = `--engine` |
+| `--terms <file>` | 共享片段词表，默认 `tools/quality/observable-terms.json` |
+| `--surface <dir>` | 承接面扫描目录，可重复；默认 `skills` + `tools/quality` |
 
 校验内容：
 
@@ -135,7 +148,7 @@ scs check criteria-engine --root .
 - 渲染物逐字节比对：`<ruleId>.<ext>` 与 `rules/<ruleId>.md`，手改即红、缺件即红
 - 分层预算：单条 rule 非空白字符 100–500，条数 ≤ 9，总量 ≤ 26513
 - 结构闸：rule 正文需含「触发 / 义务 / 例外 / 判定动作」四件
-- `skills/**` 与 `tools/quality/**` 不得出现 `sharedPhrases` 中的共享片段
+- 承接面目录（默认 `skills/**` 与 `tools/quality/**`）不得出现 `sharedPhrases` 中的共享片段
 
 输出首行固定为 `判据 N 条 / 绿 M / 红 K`；末行为 `criteria-engine ok` 且 exit 0 才算通过。有问题时逐条打印 `[criteria-engine] <file> <code>：<detail>` 并 exit 1；引擎加载失败 exit 2。
 
