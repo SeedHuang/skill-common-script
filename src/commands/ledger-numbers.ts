@@ -32,6 +32,10 @@ export interface LedgerNumbersRun {
 // C1：数字 + 单位 + 括号里的三级分布。允许 `**加粗**`、`（卡级 …）` 这类书写变体。
 const RE_ARITH =
   /(\d+)\s*\*{0,2}\s*(?:个问题|张|条|处)\*{0,2}\s*[（(]\s*(?:\*{0,2}卡级\*{0,2}\s*)?P0\s*(\d+)\s*\/\s*P1\s*(\d+)\s*\/\s*P2\s*(\d+)/g;
+// C2 新声明形态：模板写的是「卡片数 53（P0 9 / P1 22 / P2 22）」，原 RE_ARITH 只认「卡级 + 张」读不到。
+const RE_CARD_COUNT = /卡片数\s*(\d+)\s*[（(]\s*P0\s*(\d+)\s*\/\s*P1\s*(\d+)\s*\/\s*P2\s*(\d+)\s*[）)]/;
+// C5 终态对账：第 3 项证据栏的机读计数
+const RE_C5 = /已修=(\d+)\s+关闭=(\d+)\s+候选=(\d+)\s+升级=(\d+)\s+带往下轮=(\d+)/;
 // 卡片标题：`#### BE-1-01 【P0】…`；序号允许 1–3 位
 const RE_CARD = /^####\s+[A-Z]{2}-\d-\d{1,3}\b/;
 const RE_CARD_LEVEL = /^####\s+[A-Z]{2}-\d-\d{1,3}\s*【(P0|P1|P2)】/;
@@ -118,24 +122,32 @@ export function checkLedgerNumbers(dir: string): LedgerNumbersResult {
     });
   }
 
-  // ── C2 实数校准（只认「卡级」+ 单位「张」的声明）──
+  // ── C2 实数校准（两种声明形态：旧「N 张（卡级 …）」与新「卡片数 N（…）」；同一行只取第一个命中，不双计）──
   if (actual) {
     const real = actual;
+    const checkDecl = (name: string, line: number, decl: string, total: string, p0: string, p1: string, p2: string) => {
+      const bad: string[] = [];
+      if (Number(p0) !== real.P0) bad.push(`P0 写 ${p0}，实为 ${real.P0}`);
+      if (Number(p1) !== real.P1) bad.push(`P1 写 ${p1}，实为 ${real.P1}`);
+      if (Number(p2) !== real.P2) bad.push(`P2 写 ${p2}，实为 ${real.P2}`);
+      if (Number(total) !== real.total) bad.push(`总数写 ${total}，实为 ${real.total}`);
+      if (bad.length) {
+        fails.push({ file: name, line, msg: `C2 与 cards.md 实际计数不符：「${decl}」→ ${bad.join('；')}` });
+      }
+    };
     for (const name of Object.keys(files)) {
       (lines[name] ?? []).forEach((l, i) => {
+        let used = false;
         for (const m of l.matchAll(RE_ARITH)) {
           const [all, total, p0, p1, p2] = m;
-          const decl = all ?? '';
-          if (!/卡级/.test(decl) || !/张/.test(decl)) continue;
-          const bad: string[] = [];
-          if (Number(p0) !== real.P0) bad.push(`P0 写 ${p0}，实为 ${real.P0}`);
-          if (Number(p1) !== real.P1) bad.push(`P1 写 ${p1}，实为 ${real.P1}`);
-          if (Number(p2) !== real.P2) bad.push(`P2 写 ${p2}，实为 ${real.P2}`);
-          if (Number(total) !== real.total) bad.push(`总数写 ${total}，实为 ${real.total}`);
-          if (bad.length) {
-            fails.push({ file: name, line: i + 1, msg: `C2 与 cards.md 实际计数不符：「${decl}」→ ${bad.join('；')}` });
-          }
+          if (!/卡级/.test(all ?? '') || !/张/.test(all ?? '')) continue;
+          used = true;
+          checkDecl(name, i + 1, all ?? '', total ?? '0', p0 ?? '0', p1 ?? '0', p2 ?? '0');
+          break;
         }
+        if (used) return;
+        const m = l.match(RE_CARD_COUNT);
+        if (m) checkDecl(name, i + 1, m[0], m[1] ?? '0', m[2] ?? '0', m[3] ?? '0', m[4] ?? '0');
       });
     }
   }
@@ -195,7 +207,29 @@ export function checkLedgerNumbers(dir: string): LedgerNumbersResult {
     }
   }
 
+  // ── C5 终态对账（缺行只 WARN：旧账本没有该行，判红会造成历史账本批量假红）──
+  const c5 = checkTerminalReconcile(dir);
+  if (c5.warn) warns.push(c5.warn);
+  if (c5.fail) fails.push({ file: 'round-check.md', line: 0, msg: c5.fail });
+
   return { fails, warns, stats: { actual, rounds: heads.length, files: Object.keys(files) } };
+}
+
+/**
+ * C5：`round-check.md` 第 3 项证据栏的机读计数求和 vs `cards.md` 卡片数。
+ * 缺行 / 缺文件只 WARN（历史账本兼容）；有行且不等才 FAIL。
+ */
+export function checkTerminalReconcile(dir: string): { fail?: string; warn?: string } {
+  const rc = join(dir, 'round-check.md');
+  if (!existsSync(rc)) return { warn: 'C5 未取数（无第 3 项行）' };
+  const line = readFileSync(rc, 'utf8').split(/\r?\n/).find((l) => l.includes('第 3 项'));
+  const m = line?.match(RE_C5);
+  if (!m) return { warn: 'C5 未取数（无第 3 项行）' };
+  const cards = join(dir, 'cards.md');
+  if (!existsSync(cards)) return { warn: '缺 cards.md（C5 已跳过）' };
+  const count = readFileSync(cards, 'utf8').split(/\r?\n/).filter((l) => RE_CARD.test(l)).length;
+  const sum = m.slice(1, 6).reduce((n, x) => n + Number(x), 0);
+  return sum === count ? {} : { fail: `C5 终态对账不符：求和 ${sum} ≠ 卡片数 ${count}` };
 }
 
 /** 读目录后核对并给出 CLI 输出。缺 progress.md = 用法错误（exit 2），不是「检查通过」。 */

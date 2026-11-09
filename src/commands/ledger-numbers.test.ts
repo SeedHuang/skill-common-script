@@ -1,8 +1,8 @@
-import { describe, expect, it } from 'vitest';
+﻿import { describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { checkLedgerNumbers, runLedgerNumbers } from './ledger-numbers.js';
+import { checkLedgerNumbers, checkTerminalReconcile, runLedgerNumbers } from './ledger-numbers.js';
 
 interface Fixture {
   cards?: string;
@@ -76,6 +76,97 @@ function compliantFixture(): Required<Fixture> {
 
 const ROW =
   '| 1 | 10:00:00~10:10:00 | 10m | 6 席 | 53 张（**卡级** P0 9 / P1 22 / P2 22） | 全 FAIL | 未起跑 | 未起跑 | ⬜ |';
+
+/** 造一个只含指定文件的临时目录；用完即删 */
+function withFiles<T>(files: Record<string, string>, fn: (dir: string) => T): T {
+  const dir = mkdtempSync(join(tmpdir(), 'scs-c5-'));
+  for (const [n, t] of Object.entries(files)) writeFileSync(join(dir, n), t, 'utf8');
+  try {
+    return fn(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+describe('C5 终态对账', () => {
+  it('求和相等 → 无 fail / 无 warn', () => {
+    withFiles({
+      'cards.md': '#### AA-1-01 【P0】x\n#### AA-1-02 【P1】y\n#### AA-1-03 【P2】z\n',
+      'round-check.md': '| 第 3 项 | 本轮终态对账 | 过 | 已修=1 关闭=1 候选=0 升级=1 带往下轮=0 |\n',
+    }, (dir) => {
+      expect(checkTerminalReconcile(dir)).toEqual({});
+    });
+  });
+
+  it('求和不等 → fail', () => {
+    withFiles({
+      'cards.md': '#### AA-1-01 【P0】x\n',
+      'round-check.md': '| 第 3 项 | 本轮终态对账 | 过 | 已修=1 关闭=1 候选=0 升级=0 带往下轮=0 |\n',
+    }, (dir) => {
+      expect(checkTerminalReconcile(dir).fail).toMatch(/C5 终态对账不符：求和 2 ≠ 卡片数 1/);
+    });
+  });
+
+  it('缺行 / 空文件 → 只 warn', () => {
+    withFiles({ 'cards.md': '#### AA-1-01 【P0】x\n', 'round-check.md': '' }, (dir) => {
+      expect(checkTerminalReconcile(dir).warn).toMatch(/C5 未取数/);
+      expect(checkTerminalReconcile(dir).fail).toBeUndefined();
+    });
+  });
+
+  it('缺 cards.md → 只 warn', () => {
+    withFiles({ 'round-check.md': '| 第 3 项 | x | 过 | 已修=0 关闭=0 候选=0 升级=0 带往下轮=0 |\n' }, (dir) => {
+      expect(checkTerminalReconcile(dir).warn).toMatch(/缺 cards\.md/);
+    });
+  });
+});
+
+describe('C2 新声明形态（卡片数 N（P0 a / P1 b / P2 c））', () => {
+  it('新形态命中且相符 → 不报 C2', () => {
+    const f = compliantFixture();
+    const cards = f.cards.replace('共 **53 张**（**卡级** P0 9 / P1 22 / P2 22）', '卡片数 53（P0 9 / P1 22 / P2 22）');
+    withReview({ ...f, cards }, (dir) => {
+      expect(checkLedgerNumbers(dir).fails.filter((x) => x.msg.includes('C2'))).toEqual([]);
+    });
+  });
+
+  it('新形态不符 → 必红', () => {
+    const f = compliantFixture();
+    const cards = f.cards.replace('共 **53 张**（**卡级** P0 9 / P1 22 / P2 22）', '卡片数 53（P0 6 / P1 22 / P2 25）');
+    withReview({ ...f, cards }, (dir) => {
+      const c2 = checkLedgerNumbers(dir).fails.filter((x) => x.msg.includes('C2'));
+      expect(c2).toHaveLength(1);
+      expect(c2[0]?.msg).toContain('P0 写 6，实为 9');
+    });
+  });
+
+  it('同一行两种形态不双计 → 只报 1 条 C2', () => {
+    const f = compliantFixture();
+    const cards = f.cards.replace(
+      '共 **53 张**（**卡级** P0 9 / P1 22 / P2 22）',
+      '共 **53 张**（**卡级** P0 6 / P1 22 / P2 25）；卡片数 53（P0 6 / P1 22 / P2 25）',
+    );
+    withReview({ ...f, cards }, (dir) => {
+      expect(checkLedgerNumbers(dir).fails.filter((x) => x.msg.includes('C2'))).toHaveLength(1);
+    });
+  });
+
+  it('半角括号变体也命中', () => {
+    const f = compliantFixture();
+    const cards = f.cards.replace('共 **53 张**（**卡级** P0 9 / P1 22 / P2 22）', '卡片数 53(P0 9 / P1 22 / P2 22)');
+    withReview({ ...f, cards }, (dir) => {
+      expect(checkLedgerNumbers(dir).fails.filter((x) => x.msg.includes('C2'))).toEqual([]);
+    });
+  });
+
+  it('旧形态仍命中（回归）', () => {
+    const f = compliantFixture();
+    const cards = f.cards.replace('P0 9 / P1 22 / P2 22', 'P0 6 / P1 22 / P2 25');
+    withReview({ ...f, cards }, (dir) => {
+      expect(checkLedgerNumbers(dir).fails.some((x) => x.msg.includes('C2'))).toBe(true);
+    });
+  });
+});
 
 describe('scs ledger numbers', () => {
   it('合规账本 → 0 处不一致', () => {
@@ -264,3 +355,4 @@ describe('scs ledger numbers', () => {
     });
   });
 });
+
