@@ -2,6 +2,7 @@ import { join, resolve } from 'node:path';
 import type { Command } from 'commander';
 import { ObservableFail, runObservable } from './check-observable.js';
 import { runCriteriaEngine } from './check-criteria-engine.js';
+import { checkLandings } from './check-landings.js';
 
 export interface CheckObservableCliOptions {
   json?: boolean;
@@ -55,6 +56,23 @@ export function registerCheckCommands(program: Command): void {
     .option('--exempt <file>', '豁免清单 JSON（默认 <root>/tools/quality/observable-exempt.json）')
     .action((options: CheckObservableCliOptions) => {
       process.exitCode = checkObservableCommand(options);
+    });
+
+  check
+    .command('landings')
+    .description('核对账本里的 path:line 是否真实存在')
+    .option('--ledger <dir>', '账本目录（必填；按 cwd 解析）')
+    .option('--root <dir>', '项目根（默认当前目录）', process.cwd())
+    .action((options: { ledger?: string; root: string }) => {
+      if (!options.ledger) {
+        console.error('用法：scs check landings --root <项目根> --ledger <账本目录>');
+        process.exitCode = 2;
+        return;
+      }
+      const r = checkLandings({ root: resolve(options.root), ledger: resolve(options.ledger) });
+      for (const line of r.out) console.log(line);
+      for (const line of r.err) console.error(line);
+      process.exitCode = r.code;
     });
 
   check
