@@ -3,6 +3,8 @@ import type { Command } from 'commander';
 import { ObservableFail, runObservable } from './check-observable.js';
 import { runCriteriaEngine } from './check-criteria-engine.js';
 import { checkLandings } from './check-landings.js';
+import { checkRules } from './check-rules.js';
+import { checkSkills } from './check-skills.js';
 
 export interface CheckObservableCliOptions {
   json?: boolean;
@@ -70,6 +72,53 @@ export function registerCheckCommands(program: Command): void {
         return;
       }
       const r = checkLandings({ root: resolve(options.root), ledger: resolve(options.ledger) });
+      for (const line of r.out) console.log(line);
+      for (const line of r.err) console.error(line);
+      process.exitCode = r.code;
+    });
+
+  check
+    .command('skills')
+    .description('技能体检：跨技能路径引用 / 自引用带前缀 / 守卫路径字符串比较')
+    .option('--root <dir>', '项目根（技能目录 = <root>/skills；默认当前目录）')
+    .option('--manifest <file>', '技能清单 JSON（可选；无默认值）')
+    .option('--json', '以 JSON 输出明细', false)
+    .action((options: { root?: string; manifest?: string; json?: boolean }) => {
+      const r = checkSkills({ root: resolve(options.root ?? process.cwd()), manifest: options.manifest, json: options.json });
+      for (const line of r.out) console.log(line);
+      for (const line of r.err) console.error(line);
+      process.exitCode = r.code;
+    });
+
+  check
+    .command('rules')
+    .description('规则体检：按 criteria 评分（单条或全库）')
+    .option('--root <dir>', '项目根（规则库 = <root>/rules；默认当前目录）')
+    .option('--terms <file>', '可观察词表 JSON（必填）')
+    .option('--file <file>', '只评单条规则')
+    .option('--rules-dir <dir>', '规则库目录（默认 <root>/rules；--file 模式下默认该文件所在目录）')
+    .option('--json', '以 JSON 输出明细', false)
+    .option('--tri-check', '三检验报告已做（AI 判）', false)
+    .option('--cognitive', '规则含认知动作（AI 判）', false)
+    .option('--baseline <file>', '体积基线 JSON')
+    .option('--type <type>', '规则类型：持续适用 / 条件触发 / 模式门控 / 待拆未定')
+    .option('--annotations <file>', '标注 JSON（可选；无仓级默认值）')
+    .action((options: {
+      root?: string; terms?: string; file?: string; rulesDir?: string; json?: boolean;
+      triCheck?: boolean; cognitive?: boolean; baseline?: string; type?: string; annotations?: string;
+    }) => {
+      const r = checkRules({
+        root: resolve(options.root ?? process.cwd()),
+        terms: options.terms ? resolve(options.terms) : '',
+        file: options.file ? resolve(options.file) : undefined,
+        rulesDir: options.rulesDir ? resolve(options.rulesDir) : undefined,
+        json: options.json,
+        triCheck: options.triCheck,
+        cognitive: options.cognitive,
+        baseline: options.baseline ? resolve(options.baseline) : undefined,
+        type: options.type,
+        annotations: options.annotations ? resolve(options.annotations) : undefined,
+      });
       for (const line of r.out) console.log(line);
       for (const line of r.err) console.error(line);
       process.exitCode = r.code;
