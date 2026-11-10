@@ -210,7 +210,7 @@ export function checkLedgerNumbers(dir: string): LedgerNumbersResult {
   // ── C5 终态对账（缺行只 WARN：旧账本没有该行，判红会造成历史账本批量假红）──
   const c5 = checkTerminalReconcile(dir);
   if (c5.warn) warns.push(c5.warn);
-  if (c5.fail) fails.push({ file: 'round-check.md', line: 0, msg: c5.fail });
+  if (c5.fail) fails.push({ file: 'round-check.md', line: c5.line ?? 0, msg: c5.fail });
 
   return { fails, warns, stats: { actual, rounds: heads.length, files: Object.keys(files) } };
 }
@@ -219,17 +219,18 @@ export function checkLedgerNumbers(dir: string): LedgerNumbersResult {
  * C5：`round-check.md` 第 3 项证据栏的机读计数求和 vs `cards.md` 卡片数。
  * 缺行 / 缺文件只 WARN（历史账本兼容）；有行且不等才 FAIL。
  */
-export function checkTerminalReconcile(dir: string): { fail?: string; warn?: string } {
+export function checkTerminalReconcile(dir: string): { fail?: string; line?: number; warn?: string } {
   const rc = join(dir, 'round-check.md');
   if (!existsSync(rc)) return { warn: 'C5 未取数（无第 3 项行）' };
-  const line = readFileSync(rc, 'utf8').split(/\r?\n/).find((l) => l.includes('第 3 项'));
-  const m = line?.match(RE_C5);
+  const lines = readFileSync(rc, 'utf8').split(/\r?\n/);
+  const idx = lines.findIndex((l) => l.includes('第 3 项'));
+  const m = idx >= 0 ? (lines[idx] ?? '').match(RE_C5) : null;
   if (!m) return { warn: 'C5 未取数（无第 3 项行）' };
   const cards = join(dir, 'cards.md');
   if (!existsSync(cards)) return { warn: '缺 cards.md（C5 已跳过）' };
   const count = readFileSync(cards, 'utf8').split(/\r?\n/).filter((l) => RE_CARD.test(l)).length;
   const sum = m.slice(1, 6).reduce((n, x) => n + Number(x), 0);
-  return sum === count ? {} : { fail: `C5 终态对账不符：求和 ${sum} ≠ 卡片数 ${count}` };
+  return sum === count ? {} : { fail: `C5 终态对账不符：求和 ${sum} ≠ 卡片数 ${count}`, line: idx + 1 };
 }
 
 /** 读目录后核对并给出 CLI 输出。缺 progress.md = 用法错误（exit 2），不是「检查通过」。 */

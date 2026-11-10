@@ -1,4 +1,4 @@
-﻿import { describe, expect, it } from 'vitest';
+﻿﻿import { describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -98,12 +98,14 @@ describe('C5 终态对账', () => {
     });
   });
 
-  it('求和不等 → fail', () => {
+  it('求和不等 → fail 且回传命中行号', () => {
     withFiles({
       'cards.md': '#### AA-1-01 【P0】x\n',
-      'round-check.md': '| 第 3 项 | 本轮终态对账 | 过 | 已修=1 关闭=1 候选=0 升级=0 带往下轮=0 |\n',
+      'round-check.md': '| 轮次 | 项 | 结论 | 证据 |\n| 1 | 别的 | 过 | — |\n| 1 | 第 3 项 | 过 | 已修=1 关闭=1 候选=0 升级=0 带往下轮=0 |\n',
     }, (dir) => {
-      expect(checkTerminalReconcile(dir).fail).toMatch(/C5 终态对账不符：求和 2 ≠ 卡片数 1/);
+      const r = checkTerminalReconcile(dir);
+      expect(r.fail).toMatch(/C5 终态对账不符：求和 2 ≠ 卡片数 1/);
+      expect(r.line).toBe(3);
     });
   });
 
