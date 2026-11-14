@@ -3,6 +3,7 @@ import { Command } from 'commander';
 import { registerTimeCommand } from './commands/time.js';
 import { registerLedgerCommands } from './commands/ledger.js';
 import { registerCheckCommands } from './commands/check.js';
+import { registerEvalCommands } from './commands/eval.js';
 import { registerHelpCommand } from './commands/help.js';
 
 const require = createRequire(import.meta.url);
@@ -19,6 +20,7 @@ export function createProgram(): Command {
   registerTimeCommand(program);
   registerLedgerCommands(program);
   registerCheckCommands(program);
+  registerEvalCommands(program);
   registerHelpCommand(program);
 
   return program;

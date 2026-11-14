@@ -1,6 +1,6 @@
 {
   "name": "skill-common-script",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "常用脚本 CLI 工具",
   "type": "module",
   "bin": {
