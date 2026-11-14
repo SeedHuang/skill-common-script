@@ -125,14 +125,39 @@ export async function runCriteriaEngine(
     const { schema, interp, rules: rulesMod } = await loadEngine(resolve(root, engineRel), engineRel);
     const findings: { file?: string; code: string; message?: string; missing?: string[]; rule?: string; phrase?: string }[] = [];
 
-    const dataAbs = resolve(root, dataRel);
+    let dataAbs = resolve(root, dataRel);
+    let dataDisplayRel = dataRel;
     const projectionAbs = resolve(root, projectionRel);
     const rulesAbs = resolve(root, RULES_DIR);
     if (!existsSync(dataAbs)) throw new CriteriaEngineFail(`判据数据目录不存在：${dataRel}`);
-    const ruleFiles = readdirSync(dataAbs).filter((n) => n.endsWith('.json') && !n.endsWith('.testcase.json') && n !== 'rules.json');
-    const tcFiles = readdirSync(dataAbs).filter((n) => n.endsWith('.testcase.json'));
-    const rules = ruleFiles.map((name) => ({ name, rule: loadJson<RuleJson>(join(dataAbs, name)) }));
-    const tcs = tcFiles.map((name) => ({ name, tc: loadJson<TestcaseJson>(join(dataAbs, name)) }));
+    // 向后兼容：`--data` 指向仓内 `models/rules`（其下才是 jsons/）时，自动下沉到 jsons/
+    const nestedDir = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true })
+        .filter((e) => e.isDirectory() && !e.name.startsWith('_') && existsSync(join(dir, e.name, 'index.json')))
+        .map((e) => e.name)
+        .sort();
+    const jsonsSub = join(dataAbs, 'jsons');
+    if (existsSync(jsonsSub) && nestedDir(jsonsSub).length) {
+      dataAbs = jsonsSub;
+      dataDisplayRel = `${dataRel}/jsons`;
+    }
+    // nested：`<data>/<id>/index.json` + `<id>/testcase.json`；否则回退 flat（既有布局零改动）
+    const nested = nestedDir(dataAbs).length > 0;
+    const ruleEntries = nested
+      ? nestedDir(dataAbs).map((id) => ({ name: `${id}/index.json`, abs: join(dataAbs, id, 'index.json') }))
+      : readdirSync(dataAbs)
+        // 模型基线（`<id>._baseline.json`）不是判据数据，与 testcase/rules.json 一并排除
+        .filter((n) => n.endsWith('.json') && !n.endsWith('.testcase.json') && !n.endsWith('._baseline.json') && n !== 'rules.json')
+        .map((n) => ({ name: n, abs: join(dataAbs, n) }));
+    const tcEntries = nested
+      ? nestedDir(dataAbs)
+        .filter((id) => existsSync(join(dataAbs, id, 'testcase.json')))
+        .map((id) => ({ name: `${id}/testcase.json`, abs: join(dataAbs, id, 'testcase.json') }))
+      : readdirSync(dataAbs)
+        .filter((n) => n.endsWith('.testcase.json'))
+        .map((n) => ({ name: n, abs: join(dataAbs, n) }));
+    const rules = ruleEntries.map(({ name, abs }) => ({ name, rule: loadJson<RuleJson>(abs) }));
+    const tcs = tcEntries.map(({ name, abs }) => ({ name, tc: loadJson<TestcaseJson>(abs) }));
     const ids = new Set(rules.map((r) => r.rule.id));
 
     let green = 0;
@@ -197,16 +222,17 @@ export async function runCriteriaEngine(
     const rulesJsonAbs = join(dataAbs, 'rules.json');
     const registered = existsSync(rulesJsonAbs) ? (loadJson<{ rules?: string[] }>(rulesJsonAbs).rules ?? []) : [];
     for (const id of registered) {
-      const ruleAbs = join(dataAbs, `${id}.json`);
+      const ruleAbs = nested ? join(dataAbs, id, 'index.json') : join(dataAbs, `${id}.json`);
+      const ruleRel = nested ? `${id}/index.json` : `${id}.json`;
       if (!existsSync(ruleAbs)) {
-        findings.push({ file: joinRel(dataRel, `${id}.json`), code: 'RuleDataMissing' });
+        findings.push({ file: joinRel(dataDisplayRel, ruleRel), code: 'RuleDataMissing' });
         continue;
       }
       let rule: unknown;
       try {
         rule = loadJson<unknown>(ruleAbs);
       } catch (e) {
-        findings.push({ file: joinRel(dataRel, `${id}.json`), code: 'RuleDataUnreadable', message: (e as Error).message });
+        findings.push({ file: joinRel(dataDisplayRel, ruleRel), code: 'RuleDataUnreadable', message: (e as Error).message });
         continue;
       }
       const projRel = `${RULES_DIR}/${id}.md`;
