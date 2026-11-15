@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createProgram } from '../program.js';
 import {
+  anchorKind,
   anchorResolves,
   measureText,
   scoreAgentAnswers,
@@ -57,6 +58,75 @@ describe('scoreRuleAnswers', () => {
     const r = scoreRuleAnswers(answers, RULE_CASES, process.cwd());
     expect(r.failures.some((f) => f.includes('T3') && f.includes('锚不可解析'))).toBe(true);
   });
+
+  it('write case：按 require 判义务与锚类型', () => {
+    const cases: RuleCase[] = [
+      { id: 'W1', kind: 'write', require: { anchor: 'path', applicability: true, target: true } },
+      { id: 'W2', kind: 'write', require: { anchor: 'command', numberCommand: true, conclusionIncludes: '18' } },
+      { id: 'W3', kind: 'write', require: { anchor: 'path', missReport: true } },
+    ];
+    const answers: RuleAnswer[] = [
+      { id: 'W1', anchor: 'package.json:1', applicability: '本仓', target: '确认' },
+      { id: 'W2', anchor: '命令：echo 18；输出首行：18', numberCommand: 'echo 18', conclusion: '共 18 张' },
+      { id: 'W3', anchor: 'package.json:1', missReport: '未找到 foo，已查 rules/ 与 skills/' },
+    ];
+    const r = scoreRuleAnswers(answers, cases, process.cwd());
+    expect(r.dimensions.R1.total).toBe(0);
+    expect(r.dimensions.R2.passed).toBe(3);
+    expect(r.dimensions.R3.passed).toBe(3);
+  });
+
+  it('write case：锚类型不符 / 缺义务 / 结论缺关键词分别点名', () => {
+    const cases: RuleCase[] = [
+      { id: 'W1', kind: 'write', require: { anchor: 'path', applicability: true, target: true } },
+      { id: 'W2', kind: 'write', require: { anchor: 'command', conclusionIncludes: '18' } },
+      { id: 'W3', kind: 'write', require: { anchor: 'path', missReport: true } },
+    ];
+    const answers: RuleAnswer[] = [
+      { id: 'W1', anchor: 'package.json', applicability: '本仓', target: '确认' },
+      { id: 'W2', anchor: '命令：echo 18；输出首行：18', conclusion: '共十七张' },
+      { id: 'W3', anchor: 'package.json:1' },
+    ];
+    const r = scoreRuleAnswers(answers, cases, process.cwd());
+    expect(r.failures.some((f) => f.includes('W1') && f.includes('锚类型不符'))).toBe(true);
+    expect(r.failures.some((f) => f.includes('W2') && f.includes('结论缺关键词'))).toBe(true);
+    expect(r.failures.some((f) => f.includes('W3') && f.includes('missReport'))).toBe(true);
+  });
+
+  it('write case：绝对路径锚在 R3 失败', () => {
+    const cases: RuleCase[] = [
+      { id: 'A1', kind: 'write', require: { anchor: 'path', applicability: true, target: true } },
+    ];
+    const answers: RuleAnswer[] = [
+      { id: 'A1', anchor: `${join(process.cwd(), 'package.json')}:1`, applicability: '本仓', target: '确认' },
+    ];
+    const r = scoreRuleAnswers(answers, cases, process.cwd());
+    expect(r.dimensions.R3.passed).toBe(0);
+    expect(r.failures.some((f) => f.includes('A1') && f.includes('锚类型不符'))).toBe(true);
+  });
+
+  it('按 scope 分组：common / specific 分列，缺池或无用例判未评测', () => {
+    const cases: RuleCase[] = [
+      { id: 'C1', scope: 'common', expect: { trigger: 'yes', verdict: 'pass', violations: [] } },
+      { id: 'S1', scope: 'specific', require: { anchor: 'any', applicability: true, target: true } },
+    ];
+    const answers: RuleAnswer[] = [
+      { id: 'C1', trigger: 'yes', verdict: 'pass', violations: [] },
+      { id: 'S1', anchor: 'package.json:1', applicability: '本仓', target: '确认' },
+    ];
+    const r = scoreRuleAnswers(answers, cases, process.cwd());
+    expect(r.byScope.common.R1.passed).toBe(1);
+    expect(r.byScope.specific.R2.passed).toBe(1);
+    expect(r.byScope.specific.R3.passed).toBe(1);
+    expect(r.dimensions.R1.passed).toBe(1);
+    expect(r.ok).toBe(true);
+
+    const onlyCommon = scoreRuleAnswers([answers[0]!], [cases[0]!], process.cwd());
+    expect(onlyCommon.failures.some((f) => f.includes('缺 specific'))).toBe(true);
+
+    const none = scoreRuleAnswers([], [], process.cwd());
+    expect(none.failures.some((f) => f.includes('无用例'))).toBe(true);
+  });
 });
 
 describe('anchorResolves', () => {
@@ -64,8 +134,20 @@ describe('anchorResolves', () => {
     expect(anchorResolves('package.json:1', process.cwd())).toBe(true);
     expect(anchorResolves('package.json', process.cwd())).toBe(true);
     expect(anchorResolves('命令：node -v；输出首行：v22', process.cwd())).toBe(true);
+    expect(anchorResolves('命令 node -v 输出首行：v22', process.cwd())).toBe(true);
     expect(anchorResolves('命令：node -v', process.cwd())).toBe(false);
     expect(anchorResolves('', process.cwd())).toBe(false);
+  });
+
+  it('拒绝绝对路径与越界路径（仓内相对路径才算可核查）', () => {
+    const abs = join(process.cwd(), 'package.json');
+    expect(anchorResolves(`${abs}:1`, process.cwd())).toBe(false);
+    expect(anchorKind(`${abs}:1`, process.cwd())).toBeNull();
+    expect(anchorResolves(abs, process.cwd())).toBe(false);
+    expect(anchorKind(abs, process.cwd())).toBeNull();
+    expect(anchorResolves('../outside.md:1', process.cwd())).toBe(false);
+    expect(anchorKind('../outside.md:1', process.cwd())).toBeNull();
+    expect(anchorResolves('package.json:1', process.cwd())).toBe(true);
   });
 });
 
